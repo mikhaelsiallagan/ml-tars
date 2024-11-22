@@ -18,3 +18,8 @@ pyreadline3==3.5.4
 sympy==1.13.3
 Werkzeug==3.0.4
 ultralytics
+onnx
+opencv-python
+google-cloud-storage
+psycopg2-binary
+python-dotenv
