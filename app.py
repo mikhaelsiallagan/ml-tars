@@ -219,34 +219,40 @@ def add_fullness_data():
 @app.route('/add-status', methods=['POST'])
 def add_status():
     data = request.get_json()
-
     status = data.get('status')  # Should be True/False
 
     # Validate input
-    if status is None:
-        return jsonify({'error': 'status is required'}), 400
+    if status is None or not isinstance(status, bool):
+        return jsonify({'error': 'Invalid or missing "status". Must be True or False.'}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-        # Insert the status into the status_updates table
+        # Use a fixed UUID for single-row logic
+        fixed_uuid = '123e4567-e89b-12d3-a456-426614174000'  # Replace this with a valid UUID
+
+        # Insert or update the status in the status_updates table
         cursor.execute(
             """
-            INSERT INTO status_updates (status_id, timestamp, status) 
+            INSERT INTO status_updates (status_id, timestamp, status)
             VALUES (%s, %s, %s)
+            ON CONFLICT (status_id) DO UPDATE
+            SET timestamp = EXCLUDED.timestamp, status = EXCLUDED.status
             """,
-            (str(uuid4()), datetime.utcnow(), status)
+            (fixed_uuid, datetime.utcnow(), status)  # Use the fixed UUID
         )
         conn.commit()
+
     except psycopg2.Error as e:
         conn.rollback()
         return jsonify({'error': 'Database error', 'details': str(e)}), 500
+
     finally:
         cursor.close()
         conn.close()
 
-    return jsonify({'message': 'Status updated successfully', 'status': status}), 201
+    return jsonify({'status': status}), 201
 
 @app.route('/get-status', methods=['GET'])
 def get_status():
@@ -254,47 +260,46 @@ def get_status():
     cursor = conn.cursor()
 
     try:
-        # Find the latest entry where status is TRUE
+        # Use the fixed UUID for the single row
+        fixed_uuid = '123e4567-e89b-12d3-a456-426614174000'  # Ensure this matches the UUID in the /add-status endpoint
+
+        # Fetch the single row based on the fixed UUID
         cursor.execute(
             """
             SELECT status_id, timestamp, status
             FROM status_updates
-            WHERE status = TRUE
-            ORDER BY timestamp DESC
-            LIMIT 1
-            """
+            WHERE status_id = %s
+            """,
+            (fixed_uuid,)
         )
         latest_status = cursor.fetchone()
 
         if latest_status:
-            # Update the found status to FALSE
+            # Update the status to FALSE
             cursor.execute(
                 """
                 UPDATE status_updates
-                SET status = FALSE
+                SET status = FALSE, timestamp = NOW()
                 WHERE status_id = %s
                 """,
-                (latest_status[0],)
+                (fixed_uuid,)
             )
             conn.commit()
 
-            # Prepare the response
-            result = {
-                'status_id': latest_status[0],
-                'timestamp': latest_status[1],
-                'status': True  # Returning the original value before the update
-            }
+            # Return only the original status
+            result = {'status': latest_status[2]}  # Original status before the update
         else:
-            result = {'message': 'No status with value TRUE found'}
+            result = {'error': 'No status entry found'}
 
     except psycopg2.Error as e:
         conn.rollback()
         return jsonify({'error': 'Database error', 'details': str(e)}), 500
+
     finally:
         cursor.close()
         conn.close()
 
-    return jsonify(result)
+    return jsonify(result), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=4500)
