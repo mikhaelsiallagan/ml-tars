@@ -216,6 +216,85 @@ def add_fullness_data():
 
     return jsonify({'message': 'Fullness data added successfully', 'bin_id': bin_id, 'fullness_level_cm': fullness_level_cm}), 201
 
+@app.route('/add-status', methods=['POST'])
+def add_status():
+    data = request.get_json()
+
+    status = data.get('status')  # Should be True/False
+
+    # Validate input
+    if status is None:
+        return jsonify({'error': 'status is required'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Insert the status into the status_updates table
+        cursor.execute(
+            """
+            INSERT INTO status_updates (status_id, timestamp, status) 
+            VALUES (%s, %s, %s)
+            """,
+            (str(uuid4()), datetime.utcnow(), status)
+        )
+        conn.commit()
+    except psycopg2.Error as e:
+        conn.rollback()
+        return jsonify({'error': 'Database error', 'details': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+    return jsonify({'message': 'Status updated successfully', 'status': status}), 201
+
+@app.route('/get-status', methods=['GET'])
+def get_status():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Find the latest entry where status is TRUE
+        cursor.execute(
+            """
+            SELECT status_id, timestamp, status
+            FROM status_updates
+            WHERE status = TRUE
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+        )
+        latest_status = cursor.fetchone()
+
+        if latest_status:
+            # Update the found status to FALSE
+            cursor.execute(
+                """
+                UPDATE status_updates
+                SET status = FALSE
+                WHERE status_id = %s
+                """,
+                (latest_status[0],)
+            )
+            conn.commit()
+
+            # Prepare the response
+            result = {
+                'status_id': latest_status[0],
+                'timestamp': latest_status[1],
+                'status': True  # Returning the original value before the update
+            }
+        else:
+            result = {'message': 'No status with value TRUE found'}
+
+    except psycopg2.Error as e:
+        conn.rollback()
+        return jsonify({'error': 'Database error', 'details': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+    return jsonify(result)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=4500)
