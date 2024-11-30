@@ -21,6 +21,9 @@ credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 storage_client = storage.Client.from_service_account_json(credentials_path)
 bucket = storage_client.bucket(bucket_name)
 
+
+LATEST_PREDICTION_UUID = "00000000-0000-0000-0000-000000000001"
+
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
@@ -87,7 +90,7 @@ def predict():
     img.save(img_path)
 
     results = model.predict(img_path, save=False, imgsz=800, conf=0.25)
-    
+
     predictions = []
     for result in results:
         for box in result.boxes:
@@ -138,11 +141,28 @@ def predict():
             "INSERT INTO predictions (prediction_id, scan_id, class_id, class_label, confidence) VALUES (%s, %s, %s, %s, %s)",
             (str(uuid4()), scan_id, pred['class_id'], pred['class_label'], pred['confidence'])
         )
+
+    cursor.execute(
+        """
+        INSERT INTO latest_prediction (latest_id, prediction_id, scan_id, timestamp, detected_type, image_url)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (latest_id) DO UPDATE
+        SET prediction_id = EXCLUDED.prediction_id,
+            timestamp = EXCLUDED.timestamp,
+            detected_type = EXCLUDED.detected_type,
+            image_url = EXCLUDED.image_url,
+            scan_id = EXCLUDED.scan_id
+        """,
+        (LATEST_PREDICTION_UUID, str(uuid4()), scan_id, datetime.utcnow(), detected_label, image_url)
+    )
+
+
     conn.commit()
     cursor.close()
     conn.close()
 
     return jsonify({'predictions': predictions, 'image_url': image_url, 'bin_id': bin_id})
+
 
 
 @app.route('/get-data', methods=['GET'])
@@ -295,6 +315,44 @@ def get_status():
         conn.rollback()
         return jsonify({'error': 'Database error', 'details': str(e)}), 500
 
+    finally:
+        cursor.close()
+        conn.close()
+
+    return jsonify(result), 200
+
+@app.route('/get-predict', methods=['GET'])
+def get_predict():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Query the fixed UUID
+        fixed_uuid = LATEST_PREDICTION_UUID
+        cursor.execute(
+            """
+            SELECT prediction_id, scan_id, timestamp, detected_type, image_url
+            FROM latest_prediction
+            WHERE latest_id = %s
+            """,
+            (fixed_uuid,)
+        )
+        latest_prediction = cursor.fetchone()
+
+        if latest_prediction:
+            # Format the result
+            result = {
+                'prediction_id': latest_prediction[0],
+                'scan_id': latest_prediction[1],
+                'timestamp': latest_prediction[2],
+                'detected_type': latest_prediction[3],
+                'image_url': latest_prediction[4]
+            }
+        else:
+            result = {'error': 'No prediction data available'}
+
+    except psycopg2.Error as e:
+        return jsonify({'error': 'Database error', 'details': str(e)}), 500
     finally:
         cursor.close()
         conn.close()
